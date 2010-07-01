@@ -10,7 +10,7 @@ use URI::URL;
 use Time::HiRes 'usleep';
 use Carp 'confess';
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 
 sub new
@@ -106,13 +106,13 @@ sub crawl
   # Try to find robots.txt:
   my ($proto, $domain) = $args{url} =~ m{^(https?)://(.*?)/};
   eval {
+    local $SIG{__DIE__} = \&confess;
     my $robots_url = "$proto://$domain/robots.txt";
-    eval {
-      my $res = $ua->request( GET $robots_url );
-      $s->rules->parse( $robots_url, $res->content )
-        if $res && $res->is_success && $res->content;
-    };
+    my $res = $ua->request( GET $robots_url );
+    $s->rules->parse( $robots_url, $res->content )
+      if $res && $res->is_success && $res->content;
   };
+  warn "Error fetching/parsing robots.txt: $@" if $@;
   
   $s->{urls}->{$args{url}} = 'taken';
   my $res = $ua->request( GET $args{url} );
