@@ -1,4 +1,7 @@
 
+v0.003    2010-09-10
+  - Using WWW::RobotRules is great, as long as you remove extra newlines before parsing.
+
 v0.002    2010-07-01
   - Updated Makefile.PL to correct prerequisites.
   - Fixed META.yml

@@ -10,7 +10,7 @@ use URI::URL;
 use Time::HiRes 'usleep';
 use Carp 'confess';
 
-our $VERSION = '0.002';
+our $VERSION = '0.003';
 
 
 sub new
@@ -98,7 +98,8 @@ sub crawl
   my $ua = LWP::UserAgent->new( agent => $s->agent );
   $ua->add_handler( response_header => sub {
     my ($response, $ua, $h) = @_;
-    my ($type) = split /\;/, $response->header('content-type');
+    my ($type) = split /\;/, ( $response->header('content-type') || '' )
+      or die "no mime type provided by server";
     grep { $type =~ m{\Q$_\E}i } $s->http_accept
       or die "unwanted mime type '$type'";
   });
@@ -109,7 +110,10 @@ sub crawl
     local $SIG{__DIE__} = \&confess;
     my $robots_url = "$proto://$domain/robots.txt";
     my $res = $ua->request( GET $robots_url );
-    $s->rules->parse( $robots_url, $res->content )
+    
+    # If robots.txt has extra newlines in it, the rules parser always allows (which is bad):
+    (my $robots_txt = $res->content) =~ s/[\r?\n]{2,}/\n/sg;
+    $s->rules->parse( $robots_url, $robots_txt )
       if $res && $res->is_success && $res->content;
   };
   warn "Error fetching/parsing robots.txt: $@" if $@;
@@ -139,7 +143,7 @@ sub _take_url
   
   my $url;
   SCOPE: {
-    ($url) = grep { $s->{urls}->{$_} eq 'new' } keys %{ $s->{urls} }
+    ($url) = grep { $s->rules->allowed( $_ ) } grep { $s->{urls}->{$_} eq 'new' } keys %{ $s->{urls} }
       or return;
     $s->{urls}->{$url} = 'taken';
   };
