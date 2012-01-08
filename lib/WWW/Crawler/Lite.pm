@@ -1,4 +1,3 @@
-
 package WWW::Crawler::Lite;
 
 use strict;
@@ -7,10 +6,11 @@ use LWP::UserAgent;
 use HTTP::Request::Common;
 use WWW::RobotRules;
 use URI::URL;
+use HTML::LinkExtor;
 use Time::HiRes 'usleep';
 use Carp 'confess';
 
-our $VERSION = '0.003';
+our $VERSION = '0.004';
 
 
 sub new
@@ -20,11 +20,13 @@ sub new
   my $s = bless {
     url_pattern       => 'https?://.+',
     agent             => "WWW-Crawler-Lite/$VERSION $^O",
-    http_accept       => [qw( text/html text/plain text/xhtml )],
+    http_accept       => [qw( text/html text/plain application/xhtml+xml )],
     on_new_urls       => sub { my @urls = @_; },
     on_bad_url        => sub { my ($bad_url) = @_; },
     on_response       => sub { my ($url, $http_response) = @_; },
     on_link           => sub { my ($from, $to, $text) = @_ },
+    follow_ok         => sub { my ($url) = @_; return 1; },
+    link_parser       => 'default',
     delay_seconds     => 1,
     disallowed        => [ ],
     %args,
@@ -81,6 +83,22 @@ sub on_link
 }# end on_link()
 
 
+sub follow_ok
+{
+  my $s = shift;
+
+  return @_ ? $s->{follow_ok} = shift : $s->{follow_ok};
+}# end follow_ok()
+
+
+sub link_parser
+{
+  my $s = shift;
+
+  return @_ ? $s->{link_parser} = shift : $s->{link_parser};
+}# end link_parser()
+
+
 sub url_count
 {
   my ($s) = @_;
@@ -105,7 +123,7 @@ sub crawl
   });
 
   # Try to find robots.txt:
-  my ($proto, $domain) = $args{url} =~ m{^(https?)://(.*?)/};
+  my ($proto, $domain) = $args{url} =~ m{^(https?)://(.*?)(?:/|$)};
   eval {
     local $SIG{__DIE__} = \&confess;
     my $robots_url = "$proto://$domain/robots.txt";
@@ -158,34 +176,59 @@ sub _parse_result
   my $base = $res->base;
   my @new_urls = ( );
 
-  (my $tmp = $res->content) =~ s{<a\s+.*?href\=(.*?)>(.*?)</a>}{
-    my ($href,$anchortext) = ( $1, $2 );
-    if( $anchortext =~ m/<img/ )
-    {
-      my ($alt) = join ". ", $anchortext =~ m/alt\="(.*?)"/sig;
-      $anchortext =~ s/<img.*?>//sig;
-      $anchortext .= ". $alt" if $alt;
-    }# end if()
-    $anchortext =~ s{</?.*?[/>]}{}sg;
-    if( my ($quote) = $href =~ m/^(['"])/ )
-    {
-      ($href) = $href =~ m/^$quote(.*?)$quote/;
-    }
-    else
-    {
-      ($href) = $href =~ m/^([^\s+])/;
-    }# end if()
-    $href = "" unless defined($href);
-    $href =~ s/\#.*$//;
-    if( $href )
-    {
-      (my $new = url($href, $base)->abs->as_string) =~ s/\#.*$//;
-      $anchortext =~ s/^\s+//s;
-      $anchortext =~ s/\s+$//s;
-      push @new_urls, { href => $new, text => $anchortext };
-    }# end if()
-    "";
-  }isgxe;
+  if( $s->link_parser eq 'HTML::LinkExtor' )
+  {
+    # This option added after the original regexp way was pointed out on perlmonks:
+    # http://www.perlmonks.org/?node_id=946548
+    my $cb = sub {
+      my ($tag, %attrs) = @_;
+      return unless uc($tag) eq 'A';
+      if( $s->follow_ok->( $attrs{href} ) )
+      {
+        push @new_urls, { href => $attrs{href}, text => $attrs{title} || $attrs{alt} };
+      }# end if()
+    };
+    my $parser = HTML::LinkExtor->new($cb, $base);
+    $parser->parse( $res->content );
+  }
+  elsif( $s->link_parser eq 'default' )
+  {
+    # This method might be a bit naive, but HTML::LinkExtor (AFAIK) doesn't allow
+    # me to get at the text within a hyperlink.
+    # I'm open to alternatives and recognise the problems inherent in parsing
+    # HTML with regexps.
+    (my $tmp = $res->content) =~ s{<a\s+.*?href\s*\=(.*?)>(.*?)</a>}{
+      my ($href,$anchortext) = ( $1, $2 );
+      if( $anchortext =~ m/<img/ )
+      {
+        my ($alt) = join ". ", $anchortext =~ m/alt\s*\=\s*"(.*?)"/sig;
+        $anchortext =~ s/<img.*?>//sig;
+        $anchortext .= ". $alt" if $alt;
+      }# end if()
+      $anchortext =~ s{</?.*?[/>]}{}sg;
+      if( my ($quote) = $href =~ m/^(['"])/ )
+      {
+        ($href) = $href =~ m/^$quote(.*?)$quote/;
+      }
+      else
+      {
+        ($href) = $href =~ m/^([^\s+])/;
+      }# end if()
+      $href = "" unless defined($href);
+      $href =~ s/\#.*$//;
+      if( $href )
+      {
+        (my $new = url($href, $base)->abs->as_string) =~ s/\#.*$//;
+        if( $s->follow_ok->( $new ) )
+        {
+          $anchortext =~ s/^\s+//s;
+          $anchortext =~ s/\s+$//s;
+          push @new_urls, { href => $new, text => $anchortext };
+        }# end if()
+      }# end if()
+      "";
+    }isgxe;
+  }# end if()
   
   $s->on_response->( $url, $res );
 
@@ -245,12 +288,18 @@ WWW::Crawler::Lite - A single-threaded crawler/spider for the web.
     agent       => 'MySuperBot/1.0',
     url_pattern => $pattern,
     http_accept => [qw( text/plain text/html )],
+    link_parser => 'default',
     on_response => sub {
       my ($url, $res) = @_;
       
       warn "$url contains " . $res->content;
       $downloaded++;
       $crawler->stop() if $downloaded++ > 5;
+    },
+    follow_ok   => sub {
+      my ($url) = @_;
+      # If you like this url and want to use it, then return a true value:
+      return 1;
     },
     on_link     => sub {
       my ($from, $to, $text) = @_;
@@ -311,6 +360,15 @@ B<Default Value:> C<https?://.+>
 
 This can be used to filter out unwanted responses.
 
+=item link_parser - String
+
+Valid values: 'C<default>' and 'C<HTML::LinkExtor>'
+
+The default value is 'C<default>' which uses a naive regexp to do the link parsing.
+
+The upshot of using 'C<default>' is that the regexp will also find the hyperlinked 
+text or alt-text (of a hyperlinked img tag) and give that to your 'C<on_link>' handler.
+
 B<Default Value:> C<[qw( text/html, text/plain, text/xhtml )]>
 
 =item on_response($url, $response) - CodeRef
@@ -363,4 +421,6 @@ This software is Free software and may be used and redistributed under the same
 terms as perl itself.
 
 =cut
+
+
 

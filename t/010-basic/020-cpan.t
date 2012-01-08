@@ -13,7 +13,7 @@ my $downloaded = 0;
 my $crawler;
 $crawler = WWW::Crawler::Lite->new(
   url_pattern => $pattern,
-  http_accept => [qw( text/plain text/html )],
+#  http_accept => [qw( text/plain text/html )],
   on_response => sub {
     my ($url, $res) = @_;
     $downloaded++;
@@ -34,7 +34,7 @@ $crawler = WWW::Crawler::Lite->new(
   on_bad_url => sub {
     my ($url) = @_;
     $pages{$url} = 'BAD';
-  }
+  },
 );
 $crawler->crawl( url => "http://search.cpan.org/recent/" );
 
